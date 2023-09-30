@@ -1,0 +1,136 @@
+#!/usr/bin/python3
+
+import sys
+from typing import List
+import pikepdf
+from dataclasses import dataclass
+
+@dataclass
+class SimpleRange:
+    firstPage: int
+    lastPage: int
+
+    def __init__(self, simpleRangeString: str)->None:
+        numStrings: List[str] = simpleRangeString.split('-')
+        if not (len(numStrings) in [1, 2]):
+            exit(f"Invalid range '{simpleRangeString}'")
+
+        for numString in numStrings:
+            if not numString.isdigit():
+                exit(f"Invalid range '{simpleRangeString}'")
+
+        self.firstPage = int(numStrings[0])
+        if self.firstPage < 1:
+            exit(f"Invalid page number '{self.firstPage}'")
+
+        if len(numStrings) == 1:
+            self.lastPage = int(numStrings[0])
+        else:
+            self.lastPage = int(numStrings[1])
+        if self.firstPage > self.lastPage:
+            self.firstPage, self.lastPage = self.lastPage, self.firstPage
+        return
+
+    def string(self):
+        return f"{self.firstPage}-{self.lastPage}"
+
+    def __lt__(self, other):
+        if self.firstPage == other.firstPage:
+            return self.lastPage >= other.lastPage
+        return self.firstPage < other.firstPage
+
+
+def extract_simple_range(srcFile: pikepdf.Pdf, pageRange: SimpleRange)->pikepdf.Pdf:
+    if len(srcFile.pages) < pageRange.lastPage:
+        exit(f"Page range '{pageRange.string()}' out of bound.")
+    outputFile: pikepdf.Pdf = pikepdf.Pdf.new()
+    for pageNum in range(pageRange.firstPage-1, pageRange.lastPage):
+        outputFile.pages.append(srcFile.pages[pageNum])
+    return outputFile
+
+
+def extract_and_join_slices(srcFile: pikepdf.Pdf, ranges: List[SimpleRange])->pikepdf.Pdf:
+    outputFile: pikepdf.Pdf = pikepdf.Pdf.new()
+    for simpleRange in ranges:
+        currentSlice = extract_simple_range(srcFile, simpleRange)
+        outputFile.pages.extend(currentSlice.pages)
+    return outputFile
+
+
+
+def merge_simple_range_list(rangeList: List[SimpleRange])->List[SimpleRange]:
+    outList = []
+    for simpleRange in rangeList:
+        if len(outList) == 0:
+            outList.append(simpleRange)
+            continue
+        if outList[-1].firstPage <= simpleRange.firstPage <= outList[-1].lastPage + 1:
+            outList[-1].lastPage = max(outList[-1].lastPage, simpleRange.lastPage)
+            continue
+        outList.append(simpleRange)
+    return outList
+
+def get_complementary_rangelist(rangeList, maxPage):
+    outList = []
+    if rangeList[0].firstPage > 1:
+        outList.append(SimpleRange(1, rangeList[0].firstPage - 1))
+    for indx in range(len(rangeList) - 1):
+        newFirst = rangeList[indx].lastPage + 1
+        newSecond = rangeList[indx + 1].firstPage - 1
+        outList.append(SimpleRange(f"{newFirst}-{newSecond}"))
+    if rangeList[-1].lastPage < maxPage:
+        newFirst = rangeList[-1].lastPage + 1
+        newSecond = maxPage
+        outList.append(SimpleRange(f"{newFirst}-{newSecond}"))
+    return outList
+
+
+def resolve_composite_range(rangeString: str)->List[SimpleRange]:
+    simpleRangeStringList: List[str] = rangeString.split(',')
+    outputList: List[SimpleRange] = []
+    for simpleRangeString in simpleRangeStringList:
+        outputList.append(SimpleRange(simpleRangeString))
+    outputList.sort()
+    return outputList
+
+
+def open_pdf(inputFileName: str)->pikepdf.Pdf:
+    try:
+        outputPdf: pikepdf.Pdf = pikepdf.Pdf.open(inputFileName)
+    except pikepdf.PasswordError:
+        exit("Program doesn't support password protected files. Abort.")
+    except FileNotFoundError:
+        exit("File not found. Abort.")
+    except:
+        exit(f"Couldn't open '{inputFileName}'. Abort.")
+    return outputPdf
+
+
+def fetch_arguments()->List[str]:
+    if len(sys.argv) != 4:
+        exit("Wrong number of arguments.")
+    return sys.argv[1:]
+
+def main()->None:
+    inputFileName, rangeString, outputFileName = fetch_arguments();
+    inputFile: pikepdf.Pdf = open_pdf(inputFileName)
+    ranges: List[SimpleRange] = resolve_composite_range(rangeString)
+
+    ranges = merge_simple_range_list(ranges)
+    for simpleRange in ranges:
+        print(simpleRange)
+
+    print()
+    ranges = get_complementary_rangelist(ranges, len(inputFile.pages))
+    for simpleRange in ranges:
+        print(simpleRange)
+
+    newFile = extract_and_join_slices(inputFile, ranges)
+    newFile.save(outputFileName)
+
+    newFile.close()
+    inputFile.close()
+
+
+if __name__=='__main__':
+    main()
